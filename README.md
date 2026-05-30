@@ -1,7 +1,5 @@
 # ghostnet
 
-Fall detection monitoring dashboard. Displays real-time fall alerts and room occupancy status via WebSocket, with event history pulled from a backend API.
-
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v18 or higher (includes npm)
