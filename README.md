@@ -4,9 +4,21 @@ Fall detection monitoring dashboard. Displays real-time fall alerts and room occ
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) v18 or higher
-- npm (comes with Node.js)
+- [Node.js](https://nodejs.org/) v18 or higher (includes npm)
 - Backend server running on `http://localhost:8000`
+
+### Installing Node.js
+
+**Windows:** Download the installer from [nodejs.org](https://nodejs.org/) and run it.
+
+**macOS:**
+```bash
+# Using Homebrew (recommended)
+brew install node
+
+# Or download the installer from nodejs.org
+```
+If you don't have Homebrew: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 
 ## Frontend Setup
 
