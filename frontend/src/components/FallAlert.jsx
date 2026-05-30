@@ -8,16 +8,19 @@ export default function FallAlert() {
   return (
     <div
       role="alert"
-      className="bg-red-600 text-white rounded-2xl p-6 shadow-lg flex flex-col gap-4"
+      className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-6 shadow-md flex flex-col gap-4"
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start gap-4">
+        <span className="text-4xl mt-0.5">⚠️</span>
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-3xl">⚠️</span>
-            <h2 className="text-2xl font-bold tracking-tight">Fall Detected</h2>
-          </div>
+          <h2 className="text-xl font-bold text-amber-800 leading-tight">
+            Possible Fall Detected
+          </h2>
+          <p className="text-amber-700 text-sm mt-1">
+            Please check in on your loved one to make sure they're okay.
+          </p>
           {fallConfidence !== null && (
-            <p className="text-red-100 text-sm">
+            <p className="text-amber-600 text-xs mt-1">
               Confidence: {Math.round(fallConfidence * 100)}%
             </p>
           )}
@@ -26,9 +29,9 @@ export default function FallAlert() {
 
       <button
         onClick={dismissFall}
-        className="w-full bg-white text-red-600 font-bold text-lg py-3 rounded-xl hover:bg-red-50 active:bg-red-100 transition-colors"
+        className="w-full bg-amber-400 hover:bg-amber-500 active:bg-amber-600 text-white font-semibold text-base py-3 rounded-xl transition-colors"
       >
-        Dismiss Alert
+        I've Checked In — Dismiss
       </button>
     </div>
   )

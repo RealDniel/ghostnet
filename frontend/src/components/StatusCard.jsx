@@ -4,18 +4,20 @@ export default function StatusCard() {
   const { occupied } = useAppContext()
 
   return (
-    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-      <p className="text-sm font-medium text-gray-500 mb-3">Room Status</p>
-      <div className="flex items-center gap-3">
-        <span className="text-4xl">{occupied ? '🧍' : '🪑'}</span>
-        <div>
-          <p className={`text-2xl font-bold ${occupied ? 'text-gray-900' : 'text-gray-400'}`}>
-            {occupied ? 'Occupied' : 'Unoccupied'}
-          </p>
-          <p className="text-sm text-gray-400">
-            {occupied ? 'Someone is in the room' : 'Room is empty'}
-          </p>
-        </div>
+    <div className="bg-stone-50 rounded-2xl p-6 shadow-sm border border-stone-200 flex items-center gap-5">
+      <span className="relative flex h-5 w-5 shrink-0">
+        {occupied && (
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60" />
+        )}
+        <span className={`relative inline-flex h-5 w-5 rounded-full shadow-sm ${occupied ? 'bg-green-500' : 'bg-orange-400'}`} />
+      </span>
+      <div>
+        <p className="text-lg font-semibold text-gray-800">
+          {occupied ? 'In the Room' : 'Not in the Room'}
+        </p>
+        <p className="text-sm text-gray-400">
+          {occupied ? 'Your loved one is currently present.' : 'No one detected in the room right now.'}
+        </p>
       </div>
     </div>
   )
