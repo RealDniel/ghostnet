@@ -13,6 +13,7 @@ import asyncio
 import json
 import math
 import os
+import random
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -53,6 +54,7 @@ def build_app(session_path: str, detect_falls: bool) -> FastAPI:
 
     async def loop():
         i = 0
+        fallen_at = None
         while True:
             # Fall scene: freeze on last frame so the alert stays visible.
             # Walk scene: stop broadcasting once done — blob stays at last position.
@@ -97,12 +99,29 @@ def build_app(session_path: str, detect_falls: bool) -> FastAPI:
                 await step_fall(fall, t, impact, motion, forced,
                                 broadcast_fn=broadcast, place_call_fn=place_caregiver_call)
 
-            # Vitals ~1 Hz when reasonably still.
-            if i % FPS == 0 and motion < 0.95 and posture not in ("falling", "fallen"):
-                br = round(14.0 + 2.0 * math.sin(t / 7.0), 1)
-                hr = round(70.0 + 6.0 * math.sin(t / 11.0), 1)
-                await broadcast({"event": "vital_signs", "heart_rate_bpm": hr,
-                                 "breathing_rate_bpm": br, "timestamp": now_iso()})
+            # Vitals ~1 Hz. Walk: HR climbs 70->90. Fall: spikes to 120 on impact,
+            # stays elevated while fallen.
+            if i % FPS == 0:
+                total = len(frames)
+                progress = min(1.0, i / total) if total > 0 else 0.0
+                if posture == "falling":
+                    fallen_at = t
+                    hr = round(120.0 + random.uniform(-4, 4), 1)
+                    br = round(24.0 + random.uniform(-1, 1), 1)
+                elif posture == "fallen" and detect_falls:
+                    time_down = (t - fallen_at) if fallen_at is not None else 0
+                    hr = round(max(85.0, 120.0 - time_down * 2.5) + random.uniform(-2, 2), 1)
+                    br = round(max(16.0, 24.0 - time_down * 0.4) + random.uniform(-0.5, 0.5), 1)
+                elif posture not in ("falling", "fallen"):
+                    base_hr = 72.0 + 18.0 * progress if detect_falls else 70.0 + 20.0 * progress
+                    base_br = 14.0 + 4.0 * progress
+                    hr = round(base_hr + 3.0 * math.sin(t / 4.0) + random.uniform(-1, 1), 1)
+                    br = round(base_br + math.sin(t / 6.0) + random.uniform(-0.5, 0.5), 1)
+                else:
+                    hr = br = None
+                if hr is not None:
+                    await broadcast({"event": "vital_signs", "heart_rate_bpm": hr,
+                                     "breathing_rate_bpm": br, "timestamp": now_iso()})
 
             i += 1
             await asyncio.sleep(DT)
