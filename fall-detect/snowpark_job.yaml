@@ -1,7 +1,0 @@
-spec:
-  container:
-    - name: trainer
-      image: /ghostnet/fall_detect/training_repo/fall-detect-trainer:latest
-      env:
-        SNOWFLAKE_WAREHOUSE: FALL_DETECTION
-        PYTHONUNBUFFERED: "1"
