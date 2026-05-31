@@ -1,11 +1,16 @@
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 
+import snowflake.connector
 import uvicorn
 import websockets
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+
+load_dotenv()
 
 DOCKER_WS_URL = "ws://localhost:3001/ws/sensing"
 RECONNECT_DELAY = 3
@@ -25,6 +30,56 @@ app.add_middleware(
 CLIENTS: set[WebSocket] = set()
 EVENT_HISTORY: list[dict] = []
 
+ALERT_EVENTS = {"fall_detected", "low_heart_rate", "low_breathing_rate"}
+
+def _sf_conn():
+    return snowflake.connector.connect(
+        user=os.environ["SNOWFLAKE_USER"],
+        password=os.environ["SNOWFLAKE_PASSWORD"],
+        account=os.environ["SNOWFLAKE_ACCOUNT"],
+        database="ghostnet",
+        schema="public",
+    )
+
+def _insert_event(event: dict):
+    try:
+        with _sf_conn() as conn:
+            conn.cursor().execute(
+                "INSERT INTO events (event, timestamp, confidence, heart_rate_bpm, breathing_rate_bpm) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (
+                    event.get("event"),
+                    event.get("timestamp"),
+                    event.get("confidence"),
+                    event.get("heart_rate_bpm"),
+                    event.get("breathing_rate_bpm"),
+                )
+            )
+    except Exception as e:
+        print(f"Snowflake insert failed: {e}")
+
+def _fetch_events() -> list[dict]:
+    try:
+        with _sf_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT event, timestamp, confidence, heart_rate_bpm, breathing_rate_bpm "
+                "FROM events ORDER BY timestamp DESC LIMIT 100"
+            )
+            return [
+                {
+                    "event": r[0],
+                    "timestamp": r[1].isoformat() if r[1] else None,
+                    "confidence": r[2],
+                    "heart_rate_bpm": r[3],
+                    "breathing_rate_bpm": r[4],
+                }
+                for r in cur.fetchall()
+            ]
+    except Exception as e:
+        print(f"Snowflake query failed: {e}")
+        return EVENT_HISTORY
+
 # Debounce state
 _last_occupied: bool | None = None
 _hr_was_low = False
@@ -40,6 +95,8 @@ def ts_from_unix(unix: float) -> str:
 
 async def broadcast(message: dict):
     EVENT_HISTORY.append(message)
+    if message.get("event") in ALERT_EVENTS:
+        await asyncio.to_thread(_insert_event, message)
     for client in list(CLIENTS):
         try:
             await client.send_text(json.dumps(message))
@@ -122,7 +179,7 @@ async def docker_consumer():
 
 @app.get("/events")
 async def get_events():
-    return EVENT_HISTORY
+    return await asyncio.to_thread(_fetch_events)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

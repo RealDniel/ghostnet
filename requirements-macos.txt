@@ -184,6 +184,7 @@ sentry-sdk==2.50.0
 shellingham==1.5.4
 six==1.17.0
 smmap==5.0.2
+snowflake-connector-python>=4.6.0
 sqlitedict==2.1.0
 starlette==0.50.0
 sympy==1.14.0
