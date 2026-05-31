@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAppContext } from '../App'
 
 function VitalNumber({ label, value, unit, low }) {
@@ -27,17 +27,56 @@ function VitalNumber({ label, value, unit, low }) {
   )
 }
 
+const DEMO_STALE_MS = 10_000
+
 export default function VitalsDisplay() {
   const { vitals } = useAppContext()
+  const [demoHr, setDemoHr] = useState(null)
+  const [demoBr, setDemoBr] = useState(null)
+  const lastRealTs = useRef(null)
+  const tickRef = useRef(0)
+
+  // Track when real vitals last arrived
+  useEffect(() => {
+    if (vitals.length > 0) lastRealTs.current = Date.now()
+  }, [vitals])
+
+  // Kick off demo oscillation when real data is stale
+  useEffect(() => {
+    const id = setInterval(() => {
+      const stale = !lastRealTs.current || Date.now() - lastRealTs.current > DEMO_STALE_MS
+      if (!stale) {
+        setDemoHr(null)
+        setDemoBr(null)
+        return
+      }
+      tickRef.current += 1
+      const t = tickRef.current
+      setDemoHr(parseFloat((70 + 6 * Math.sin(t / 11) + (Math.random() - 0.5) * 2).toFixed(1)))
+      setDemoBr(parseFloat((14 + 2 * Math.sin(t / 7) + (Math.random() - 0.5) * 0.6).toFixed(1)))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+
   const latest = vitals[vitals.length - 1] ?? null
+  const isDemo = !latest && demoHr != null
+  const hr = latest?.hr ?? demoHr
+  const br = latest?.br ?? demoBr
 
   return (
     <div className="rounded-xl bg-stone-800 border border-stone-700 px-4 py-3">
-      <p className="text-xs text-stone-500 mb-3 uppercase tracking-widest">Live Vitals</p>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-stone-500 uppercase tracking-widest">Live Vitals</p>
+        {isDemo && (
+          <span className="text-xs font-semibold px-2 py-0.5 rounded bg-amber-900/60 text-amber-400 border border-amber-700/50">
+            DEMO
+          </span>
+        )}
+      </div>
       <div className="flex gap-4">
-        <VitalNumber label="Heart Rate" value={latest?.hr ?? null} unit="bpm" low={50} />
+        <VitalNumber label="Heart Rate" value={hr} unit="bpm" low={50} />
         <div className="w-px bg-stone-700" />
-        <VitalNumber label="Breathing" value={latest?.br ?? null} unit="/min" low={8} />
+        <VitalNumber label="Breathing" value={br} unit="/min" low={8} />
       </div>
     </div>
   )

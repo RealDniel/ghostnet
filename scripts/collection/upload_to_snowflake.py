@@ -1,20 +1,21 @@
 import json
 import os
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from dotenv import load_dotenv
 import snowflake.connector
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
 
+_DATA = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
 FILES = [
-    "fall_data.jsonl",
-    "lying_data.jsonl",
-    "sitting_data.jsonl",
-    "walking_data.jsonl",
-    "data/fall-csi.jsonl",
-    "data/walk-csi.jsonl",
+    os.path.join(_DATA, "fall_data.jsonl"),
+    os.path.join(_DATA, "lying_data.jsonl"),
+    os.path.join(_DATA, "sitting_data.jsonl"),
+    os.path.join(_DATA, "walking_data.jsonl"),
+    os.path.join(_DATA, "fall-csi.jsonl"),
+    os.path.join(_DATA, "walk-csi.jsonl"),
 ]
 
 def sf_conn():
@@ -27,7 +28,7 @@ def sf_conn():
     )
 
 def upload():
-    base = os.path.join(os.path.dirname(__file__), '..')
+    base = os.path.join(os.path.dirname(__file__), '..', '..')
     all_rows = []
 
     for filename in FILES:

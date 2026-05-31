@@ -6,9 +6,10 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import os as _os
 UDP_PORT    = 5005
 RECORD_SECS = 4
-OUTPUT_FILE = "lying_data.jsonl"
+OUTPUT_FILE = _os.path.join(_os.path.dirname(__file__), '..', '..', 'data', 'lying_data.jsonl')
 
 recording = False
 record_buf = []

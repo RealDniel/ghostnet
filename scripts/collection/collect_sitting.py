@@ -4,12 +4,12 @@ import socket
 import struct
 import threading
 import time
-from collections import deque
 from datetime import datetime, timezone
 
-UDP_PORT     = 5005
-RECORD_SECS  = 4
-OUTPUT_FILE  = "fall_data.jsonl"
+import os as _os
+UDP_PORT    = 5005
+RECORD_SECS = 4
+OUTPUT_FILE = _os.path.join(_os.path.dirname(__file__), '..', '..', 'data', 'sitting_data.jsonl')
 
 recording = False
 record_buf = []
@@ -27,7 +27,6 @@ def udp_listener():
         if magic != 0xC5110001:
             continue
         n_sub = struct.unpack_from("<H", data, 6)[0]
-        rssi  = struct.unpack_from("b", data, 16)[0]
         iq    = data[20:]
         amps  = []
         for k in range(n_sub):
@@ -41,7 +40,7 @@ def udp_listener():
 
 def save_sample(window, idx):
     entry = {
-        "label": "fall",
+        "label": "sitting",
         "sample_index": idx,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "n_samples": len(window),
@@ -49,7 +48,7 @@ def save_sample(window, idx):
     }
     with open(OUTPUT_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
-    print(f"  Saved fall sample #{idx} ({len(window)} packets) to {OUTPUT_FILE}")
+    print(f"  Saved sitting sample #{idx} ({len(window)} packets) to {OUTPUT_FILE}")
 
 def main():
     global recording, record_buf
@@ -57,13 +56,13 @@ def main():
     t = threading.Thread(target=udp_listener, daemon=True)
     t.start()
 
-    print("\nFall data collector ready.")
-    print(f"Each press of Enter records {RECORD_SECS} seconds of CSI data labeled as 'fall'.")
-    print("Press Enter to start a recording, Ctrl+C to stop.\n")
+    print("\nSitting data collector ready.")
+    print(f"Sit near the ESP32, then press Enter to record {RECORD_SECS} seconds.")
+    print("Press Ctrl+C to stop.\n")
 
     idx = 1
     while True:
-        input(f"[Sample {idx}] Press Enter to start recording fall...")
+        input(f"[Sample {idx}] Sit still, then press Enter to start recording...")
 
         with record_lock:
             recording = True

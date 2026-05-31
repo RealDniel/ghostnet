@@ -6,6 +6,8 @@ import ConnectionStatus from './components/ConnectionStatus'
 import Scene3D from './components/Scene3D'
 import CsiHeatmap from './components/CsiHeatmap'
 import VitalsDisplay from './components/VitalsDisplay'
+import VitalsGraph from './components/VitalsGraph'
+import HistoryPanel from './components/HistoryPanel'
 
 export const AppContext = createContext(null)
 
@@ -120,6 +122,8 @@ export default function App() {
           {/* Scrollable content */}
           <div className="flex-1 overflow-y-auto flex flex-col gap-4 px-4 py-4">
             <VitalsDisplay />
+            <VitalsGraph />
+            <HistoryPanel />
             <CsiHeatmap />
             <FallAlert />
             <EventLog />

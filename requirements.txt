@@ -1,0 +1,21 @@
+# GhostNet — Python dependencies
+# Install: pip install -r requirements.txt
+# For PyTorch with CUDA: see https://pytorch.org/get-started/locally/
+
+# Web backend
+fastapi>=0.115.0
+uvicorn>=0.32.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.9
+
+# Signal processing
+numpy>=1.26.0
+scipy>=1.13.0
+
+# Snowflake
+snowflake-connector-python>=4.6.0
+
+# ML training (fall-detect + hr_br)
+torch>=2.0.0
+scikit-learn>=1.4.0

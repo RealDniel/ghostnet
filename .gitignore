@@ -5,7 +5,7 @@ node_modules/
 dist/
 build/
 
-# Local env files — never commit secrets
+# Secrets — never commit
 .env
 .env.local
 .env.*.local
@@ -21,13 +21,19 @@ env/
 *.egg-info/
 .pytest_cache/
 
-# Large data / recordings (commit the baked demo files in data/ but not raw captures)
-data/recordings/
-*.csi.jsonl.raw
-*.pcap
+# Raw sensor data (collected locally, not committed)
+data/*.jsonl
+data/*.json
+!data/demo/walk-session.json
 
-# Logs
+# ML artifacts (large binaries — retrain or download separately)
+*.pt
+*.npz
+
+# Logs / captures
 *.log
+*.pcap
+*.csi.jsonl.raw
 npm-debug.log*
 /tmp/
 
@@ -40,6 +46,3 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
-
-# Python venv
-venv

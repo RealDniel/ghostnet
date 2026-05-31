@@ -12,6 +12,7 @@ import snowflake.connector
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from scipy.signal import butter, filtfilt, welch
 
@@ -75,6 +76,18 @@ def _insert_event(event: dict):
     except Exception as e:
         print(f"Snowflake insert failed: {e}")
 
+def _insert_csi_frame(ts: str, amplitudes: list):
+    try:
+        import json
+        with _sf_conn() as conn:
+            conn.cursor().execute(
+                "INSERT INTO csi_raw (timestamp, board_id, rssi, subcarriers, amplitudes) "
+                "SELECT %s, %s, %s, %s, PARSE_JSON(%s)",
+                (ts, "esp32", 0, len(amplitudes), json.dumps(amplitudes))
+            )
+    except Exception as e:
+        print(f"Snowflake CSI insert failed: {e}")
+
 def _insert_vitals_label(ts: str, hr: float, br: float):
     try:
         with _sf_conn() as conn:
@@ -84,6 +97,58 @@ def _insert_vitals_label(ts: str, hr: float, br: float):
             )
     except Exception as e:
         print(f"Snowflake vitals label insert failed: {e}")
+
+def _fetch_history(days: int = 60) -> dict:
+    """Return daily avg HR/BR and fall counts for the past N days."""
+    try:
+        with _sf_conn() as conn:
+            cur = conn.cursor()
+
+            cur.execute(f"""
+                SELECT
+                    DATE_TRUNC('day', timestamp)::DATE AS day,
+                    ROUND(AVG(hr), 1)                  AS avg_hr,
+                    ROUND(AVG(br), 1)                  AS avg_br,
+                    COUNT(*)                           AS n
+                FROM vitals_labels
+                WHERE timestamp > DATEADD(day, -{days}, CURRENT_TIMESTAMP())
+                GROUP BY 1
+                ORDER BY 1 ASC
+            """)
+            vitals_rows = [
+                {
+                    "day": str(r[0]),
+                    "avg_hr": float(r[1]) if r[1] is not None else None,
+                    "avg_br": float(r[2]) if r[2] is not None else None,
+                    "n": int(r[3]),
+                }
+                for r in cur.fetchall()
+            ]
+
+            cur.execute(f"""
+                SELECT
+                    DATE_TRUNC('day', timestamp)::DATE AS day,
+                    COUNT(*) AS falls
+                FROM events
+                WHERE event = 'fall_detected'
+                  AND timestamp > DATEADD(day, -{days}, CURRENT_TIMESTAMP())
+                GROUP BY 1
+                ORDER BY 1 ASC
+            """)
+            fall_rows = [{"day": str(r[0]), "falls": int(r[1])} for r in cur.fetchall()]
+
+            total_falls = sum(r["falls"] for r in fall_rows)
+
+            return {
+                "days": days,
+                "vitals": vitals_rows,
+                "falls_by_day": fall_rows,
+                "total_falls": total_falls,
+            }
+    except Exception as e:
+        print(f"Snowflake history query failed: {e}")
+        return {"days": days, "vitals": [], "falls_by_day": [], "total_falls": 0}
+
 
 def _fetch_events() -> list[dict]:
     try:
@@ -175,6 +240,7 @@ async def process_csi(amplitudes: list, ts: str):
 
     _amp_window.append(amplitudes)
     _tick += 1
+    asyncio.create_task(asyncio.to_thread(_insert_csi_frame, ts, amplitudes))
 
     window = list(_amp_window)
 
@@ -226,6 +292,75 @@ async def process_csi(amplitudes: list, ts: str):
             elif br >= BR_LOW_THRESHOLD:
                 _br_was_low = False
 
+def _poll_snowflake(last_event_ts: str, last_vitals_ts: str) -> tuple[list[dict], list[dict], str, str]:
+    """Fetch rows from events and vitals_labels newer than the given timestamps."""
+    new_events, new_vitals = [], []
+    try:
+        with _sf_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT event, timestamp, confidence, heart_rate_bpm, breathing_rate_bpm "
+                "FROM events WHERE timestamp > %s::TIMESTAMP_TZ ORDER BY timestamp ASC LIMIT 50",
+                (last_event_ts,)
+            )
+            for r in cur.fetchall():
+                ts_str = r[1].isoformat() if r[1] else now()
+                new_events.append({
+                    "event": r[0],
+                    "timestamp": ts_str,
+                    "confidence": r[2],
+                    "heart_rate_bpm": r[3],
+                    "breathing_rate_bpm": r[4],
+                    "source": "snowflake",
+                })
+                last_event_ts = ts_str
+
+            cur.execute(
+                "SELECT timestamp, hr, br FROM vitals_labels "
+                "WHERE timestamp > %s::TIMESTAMP_TZ ORDER BY timestamp ASC LIMIT 50",
+                (last_vitals_ts,)
+            )
+            for r in cur.fetchall():
+                ts_str = r[0].isoformat() if r[0] else now()
+                new_vitals.append({
+                    "event": "vital_signs",
+                    "heart_rate_bpm": r[1],
+                    "breathing_rate_bpm": r[2],
+                    "timestamp": ts_str,
+                    "source": "snowflake",
+                })
+                last_vitals_ts = ts_str
+    except Exception as e:
+        print(f"Snowflake poll failed: {e}")
+    return new_events, new_vitals, last_event_ts, last_vitals_ts
+
+
+async def snowflake_poller():
+    """Poll Snowflake every 15s for new events/vitals and broadcast to WebSocket clients."""
+    last_event_ts = "1970-01-01T00:00:00+00:00"
+    last_vitals_ts = "1970-01-01T00:00:00+00:00"
+    await asyncio.sleep(5)  # let startup settle
+    while True:
+        new_events, new_vitals, last_event_ts, last_vitals_ts = await asyncio.to_thread(
+            _poll_snowflake, last_event_ts, last_vitals_ts
+        )
+        for msg in new_vitals:
+            EVENT_HISTORY.append(msg)
+            for client in list(CLIENTS):
+                try:
+                    await client.send_text(json.dumps(msg))
+                except Exception:
+                    CLIENTS.discard(client)
+        for msg in new_events:
+            EVENT_HISTORY.append(msg)
+            for client in list(CLIENTS):
+                try:
+                    await client.send_text(json.dumps(msg))
+                except Exception:
+                    CLIENTS.discard(client)
+        await asyncio.sleep(15)
+
+
 async def udp_consumer():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("", UDP_PORT))
@@ -253,6 +388,24 @@ async def udp_consumer():
         except Exception as e:
             print(f"UDP error: {e}")
             await asyncio.sleep(0.1)
+
+class FallPayload(BaseModel):
+    confidence: float
+    label: str
+    timestamp: str
+
+@app.post("/fall")
+async def receive_fall(payload: FallPayload):
+    await broadcast({
+        "event": "fall_detected",
+        "confidence": payload.confidence,
+        "timestamp": payload.timestamp,
+    })
+    return {"ok": True}
+
+@app.get("/history")
+async def get_history(days: int = 21):
+    return await asyncio.to_thread(_fetch_history, days)
 
 @app.get("/events")
 async def get_events():
@@ -284,6 +437,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(udp_consumer())
+    asyncio.create_task(snowflake_poller())
 
 if __name__ == "__main__":
     uvicorn.run(app, host="localhost", port=8000)
