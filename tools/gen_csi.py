@@ -35,7 +35,7 @@ def bake(name: str, duration: float, sampler):
             frame = {
                 "t": round(t, 3),
                 "node_id": 1,
-                "csi": m.synth_csi(motion, behind, impact),
+                "csi": m.synth_csi(motion, behind, impact, pos_x=x),
                 "position": {"x": round(x, 3), "y": round(y, 3), "z": round(z, 3)},
                 "motion": round(motion, 3),
                 "posture": posture,

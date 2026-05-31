@@ -1,12 +1,11 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { useWebSocket } from './hooks/useWebSocket'
 import FallAlert from './components/FallAlert'
-import StatusCard from './components/StatusCard'
 import EventLog from './components/EventLog'
 import ConnectionStatus from './components/ConnectionStatus'
-import VitalsGraph from './components/VitalsGraph'
 import Scene3D from './components/Scene3D'
 import CsiHeatmap from './components/CsiHeatmap'
+import VitalsDisplay from './components/VitalsDisplay'
 
 export const AppContext = createContext(null)
 
@@ -28,7 +27,6 @@ export default function App() {
   const [vitals, setVitals] = useState([])
   const [frame, setFrame] = useState(null)
 
-  // Clear blob whenever the backend disconnects.
   useEffect(() => {
     if (!connected) {
       setFrame(null)
@@ -45,10 +43,7 @@ export default function App() {
       return
     }
 
-    if (message.event === 'session_end') {
-      // Blob freezes at last position; next script teleports it to the new start.
-      return
-    }
+    if (message.event === 'session_end') return
 
     if (message.event === 'vital_signs') {
       setVitals((prev) => {
@@ -87,7 +82,6 @@ export default function App() {
         if (prev.some((e) => e.timestamp === message.timestamp)) return prev
         return [message, ...prev]
       })
-
       if (message.event === 'fall_detected') {
         setFallDetected(true)
         setFallConfidence(message.confidence ?? null)
@@ -106,20 +100,32 @@ export default function App() {
 
   return (
     <AppContext.Provider value={{ fallDetected, fallConfidence, fallGrace, callPlaced, occupied, events, vitals, connected, dismissFall, frame }}>
-      <div className="min-h-screen bg-stone-100">
-        <header className="bg-stone-50 border-b border-stone-200 px-4 py-3 flex items-center justify-between">
-          <h1 className="text-lg font-bold text-gray-900">GhostNet</h1>
-          <ConnectionStatus />
-        </header>
+      <div className="flex h-screen w-screen overflow-hidden bg-stone-950">
 
-        <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
-          <FallAlert />
+        {/* Left — 3D scene fills all remaining space */}
+        <div className="flex-1 min-w-0">
           <Scene3D />
-          <StatusCard />
-          <CsiHeatmap />
-          <VitalsGraph />
-          <EventLog />
-        </main>
+        </div>
+
+        {/* Right panel */}
+        <div className="w-72 flex flex-col bg-stone-900 border-l border-stone-800 overflow-hidden">
+
+          {/* Logo + connection */}
+          <div className="px-5 py-4 border-b border-stone-800 flex items-center justify-between shrink-0">
+            {/* Drop your logo file at frontend/src/assets/logo.svg and swap this block */}
+            <span className="text-white font-bold text-lg tracking-wide">GhostNet</span>
+            <ConnectionStatus />
+          </div>
+
+          {/* Scrollable content */}
+          <div className="flex-1 overflow-y-auto flex flex-col gap-4 px-4 py-4">
+            <VitalsDisplay />
+            <CsiHeatmap />
+            <FallAlert />
+            <EventLog />
+          </div>
+
+        </div>
       </div>
     </AppContext.Provider>
   )

@@ -68,9 +68,15 @@ def build_app(session_path: str, detect_falls: bool) -> FastAPI:
                 impact, motion, posture = 3.0, 0.0, "fallen"
 
             if not detect_falls and i >= len(frames):
-                await asyncio.sleep(DT)
-                i += 1
-                continue
+                await broadcast({"event": "session_end", "timestamp": now_iso()})
+                await asyncio.sleep(0.5)
+                for c in list(clients):
+                    try:
+                        await c.close()
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.5)
+                os._exit(0)
 
             await broadcast({
                 "event": "frame",

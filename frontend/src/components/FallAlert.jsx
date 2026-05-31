@@ -40,16 +40,13 @@ export default function FallAlert() {
             {callPlaced ? 'Caregiver Called' : 'Possible Fall Detected'}
           </h2>
           {callPlaced ? (
-            <p className="text-red-700 text-sm mt-1">No movement after the fall — caregiver has been called.</p>
+            <p className="text-red-700 text-sm mt-1">No movement after the fall. Caregiver has been called.</p>
           ) : counting ? (
             <p className="text-amber-700 text-sm mt-1">
-              Calling caregiver in <span className="font-bold tabular-nums">{Math.ceil(remaining)}s</span> — dismiss if you're okay.
+              Calling caregiver in <span className="font-bold tabular-nums">{Math.ceil(remaining)}s</span>. Dismiss if you're okay.
             </p>
           ) : (
-            <p className="text-red-700 text-sm mt-1">No response — calling caregiver…</p>
-          )}
-          {fallConfidence !== null && !callPlaced && (
-            <p className="text-amber-600 text-xs mt-1">Confidence: {Math.round(fallConfidence * 100)}%</p>
+            <p className="text-red-700 text-sm mt-1">No response. Calling caregiver.</p>
           )}
         </div>
       </div>
@@ -62,7 +59,7 @@ export default function FallAlert() {
             : 'bg-amber-400 hover:bg-amber-500 active:bg-amber-600'
         }`}
       >
-        {callPlaced ? 'Dismiss' : "I'm Okay — Cancel"}
+        {callPlaced ? 'Dismiss' : "I'm Okay, Cancel"}
       </button>
     </div>
   )

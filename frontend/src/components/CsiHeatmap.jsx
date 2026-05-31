@@ -38,8 +38,8 @@ export default function CsiHeatmap() {
   }, [frame])
 
   return (
-    <div className="bg-stone-50 rounded-2xl p-4 shadow-sm border border-stone-200">
-      <p className="text-sm font-semibold text-gray-700 mb-2">Live CSI — raw radio (64 subcarriers)</p>
+    <div className="rounded-xl bg-stone-800 border border-stone-700 px-4 py-3">
+      <p className="text-xs text-stone-500 mb-2 uppercase tracking-widest">Live CSI Signal</p>
       <canvas
         ref={canvasRef}
         width={WIDTH}
@@ -47,7 +47,7 @@ export default function CsiHeatmap() {
         className="w-full h-28 rounded-lg image-render-pixel"
         style={{ imageRendering: 'pixelated' }}
       />
-      <p className="text-xs text-gray-400 mt-1">Brighter = more signal disturbance (motion). This is real sensor data, no model.</p>
+      <p className="text-xs text-stone-600 mt-1">Brighter = more signal disturbance from motion.</p>
     </div>
   )
 }

@@ -75,7 +75,7 @@ export default function Scene3D() {
   const hasData = !!frame?.position
 
   return (
-    <div className="relative h-[420px] rounded-2xl overflow-hidden bg-stone-900 border border-stone-700">
+    <div className="relative h-full w-full overflow-hidden bg-stone-950">
       <Canvas camera={{ position: [4, 4, 6], fov: 50 }}>
         <ambientLight intensity={0.6} />
         <directionalLight position={[5, 8, 5]} intensity={0.8} />

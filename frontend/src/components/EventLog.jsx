@@ -16,8 +16,8 @@ function formatTime(iso) {
 }
 
 function detail(event) {
-  if (event.event === 'fall_detected' && event.confidence !== undefined)
-    return `Detected with ${Math.round(event.confidence * 100)}% confidence`
+  if (event.event === 'fall_detected')
+    return 'Fall detected'
   if (event.event === 'low_heart_rate')
     return `${event.heart_rate_bpm} bpm — below safe range`
   if (event.event === 'low_breathing_rate')
@@ -28,13 +28,13 @@ function detail(event) {
 function EventRow({ event }) {
   const meta = EVENT_META[event.event] ?? { label: event.event, color: 'bg-gray-100 text-gray-600' }
   return (
-    <li className="flex items-start gap-4 py-4 border-b border-gray-100 last:border-0">
-      <span className="text-sm text-gray-400 mt-0.5 w-16 shrink-0 pt-0.5">{formatTime(event.timestamp)}</span>
-      <div className="flex flex-col gap-1">
-        <span className={`text-xs font-bold px-3 py-1 rounded-full w-fit ${meta.color}`}>
+    <li className="flex items-start gap-3 py-3 border-b border-stone-700 last:border-0">
+      <span className="text-xs text-stone-600 mt-0.5 w-12 shrink-0">{formatTime(event.timestamp)}</span>
+      <div className="flex flex-col gap-0.5">
+        <span className={`text-xs font-bold px-2 py-0.5 rounded-full w-fit ${meta.color}`}>
           {meta.label}
         </span>
-        <span className="text-sm text-gray-600">{detail(event)}</span>
+        <span className="text-xs text-stone-500">{detail(event)}</span>
       </div>
     </li>
   )
@@ -61,14 +61,13 @@ export default function EventLog() {
   merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
   return (
-    <div className="bg-stone-50 rounded-2xl shadow-sm border border-stone-200">
-      <div className="px-6 py-5 border-b border-gray-100">
-        <h2 className="text-base font-semibold text-gray-700">Alert Log</h2>
-        <p className="text-xs text-gray-400 mt-0.5">Recent health and safety alerts</p>
+    <div className="rounded-xl bg-stone-800 border border-stone-700">
+      <div className="px-4 py-3 border-b border-stone-700">
+        <h2 className="text-xs text-stone-500 uppercase tracking-widest">Alert Log</h2>
       </div>
-      <div className="px-6 max-h-96 overflow-y-auto">
+      <div className="px-4 max-h-64 overflow-y-auto">
         {merged.length === 0 ? (
-          <p className="text-sm text-gray-400 py-8 text-center">No alerts — everything looks good.</p>
+          <p className="text-xs text-stone-600 py-6 text-center">No alerts yet.</p>
         ) : (
           <ul>
             {merged.map((e, i) => (

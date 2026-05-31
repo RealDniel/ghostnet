@@ -11,8 +11,8 @@ export default function ConnectionStatus() {
         )}
         <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
       </span>
-      <span className="text-sm text-gray-500">
-        {connected ? 'Connected' : 'Disconnected'}
+      <span className="text-xs text-stone-500">
+        {connected ? 'Live' : 'Offline'}
       </span>
     </div>
   )

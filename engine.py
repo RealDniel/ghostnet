@@ -1,25 +1,3 @@
-"""
-mock_csi.py — GhostNet demo engine (synthetic CSI + scripted scenes).
-
-Streams real-format frames over ws://localhost:8000/ws for the 3D visualizer:
-  - synthetic CSI (64 subcarriers) whose variance tracks motion (drives the heatmap)
-  - an authored person position (the blob's path)
-  - a believable impact/acceleration metric that separates a slow lie-down from a fall
-
-Two scenes (switchable for stage control):
-  SCENE "walk" — run in a circle, then walk out the door behind the wall and stay sensed (loops).
-  SCENE "fall" — lie down slowly (NO alert), get up, then fall (ALERT) -> Twilio call.
-
-Run:
-    python mock_csi.py                 # serves ws://localhost:8000/ws, loops the "walk" scene
-    curl localhost:8000/scene/fall     # switch to the fall scene
-    curl localhost:8000/scene/walk     # back to walk
-    curl localhost:8000/trigger/fall   # force an immediate fall (stage backup)
-
-Honesty note: the CSI and motion magnitude are synthetic-but-physically-shaped; the *path* is
-authored. This is a record/replay-style demo — never claim the position is computed from WiFi.
-"""
-
 import asyncio
 import json
 import math
@@ -35,11 +13,10 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-# ── Room geometry (metres) ──────────────────────────────────────────────────
-ROOM_W, ROOM_D = 5.0, 4.0          # x in [0,5], y(depth) in [0,4]
+ROOM_W, ROOM_D = 5.0, 4.0         
 CENTER = (2.5, 2.0)
-DOOR = (5.0, 2.0)                  # door on the east wall; x > 5.0 is "behind the wall"
-BOARDS = [(0.2, 0.2), (4.8, 0.2)]  # two ESP32-S3 positions
+DOOR = (5.0, 2.0)                 
+BOARDS = [(0.2, 0.2), (4.8, 0.2)]
 N_SUB = 64
 FPS = 20
 DT = 1.0 / FPS
@@ -62,9 +39,13 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def synth_csi(motion: float, behind_wall: bool, impact: float) -> list[float]:
+def synth_csi(motion: float, behind_wall: bool, impact: float, pos_x: float = 0.0) -> list[float]:
     """64 subcarrier amplitudes; variance scales with motion, attenuated through walls."""
-    atten = 0.4 if behind_wall else 1.0
+    if behind_wall:
+        depth = max(0.0, pos_x - ROOM_W)
+        atten = max(0.25, 1.0 - depth * 0.18)
+    else:
+        atten = min(1.0, 1.0 - max(0.0, pos_x - (ROOM_W - 1.0)) * 0.08)
     var = motion * 9.0 * atten
     spike = 22.0 if impact > IMPACT_FALL_THRESHOLD else 0.0   # fall shows a broadband jolt
     out = []
@@ -75,10 +56,8 @@ def synth_csi(motion: float, behind_wall: bool, impact: float) -> list[float]:
         out.append(round(max(0.0, amp), 2))
     return out
 
-
-# ── Recorded walk session (replayed; the blob follows the captured path) ────
 WALK_PATH = os.path.join(os.path.dirname(__file__), "demo", "walk-session.json")
-MAX_WALK_SPEED = 1.2  # m/s -> mapped to motion 1.0
+MAX_WALK_SPEED = 1.2 
 
 
 def _load_walk():
@@ -96,7 +75,6 @@ _WALK_LOOP, _WALK_WP = _load_walk()
 
 
 def _sample_path(t: float):
-    """Interpolate the recorded waypoints; motion is derived from walking speed."""
     loop, wp = _WALK_LOOP, _WALK_WP
     t = t % loop
     for i in range(len(wp) - 1):
@@ -119,7 +97,6 @@ def scene_walk(t: float) -> tuple[tuple[float, float, float], float, float, str]
     if _WALK_WP:
         pos, motion, posture = _sample_path(t)
         return pos, motion, 0.0, posture
-    # Fallback if the session file is missing: a simple circle + exit.
     period = 20.0
     t = t % period
     if t < 13.0:
@@ -138,21 +115,21 @@ def scene_fall(t: float) -> tuple[tuple[float, float, float], float, float, str]
         return (x, y, 1.0 + 0.02 * math.sin(t * 3)), 0.18, 0.0, "standing"
     elif t < 6.0:
         return (x + (t - 5.0) * 0.5, y, 1.0), 0.5, 0.0, "walking"
-    elif t < 10.0:                                    # slow lie-down over 4s -> ~0.2 m/s
+    elif t < 10.0:                                   
         f = (t - 6.0) / 4.0
         z = 1.0 - 0.8 * f
         return (2.5, y, z), 0.3, 0.8 / 4.0, "lying-down"
     elif t < 13.0:
         return (2.5, y, 0.2), 0.05, 0.0, "lying"
-    elif t < 15.0:                                    # get back up
+    elif t < 15.0:                                    
         f = (t - 13.0) / 2.0
         return (2.5, y, 0.2 + 0.8 * f), 0.4, 0.0, "standing-up"
     elif t < 18.0:
         return (2.5 + (t - 15.0) * 0.2, y, 1.0), 0.3, 0.0, "standing"
-    elif t < 18.4:                                    # FALL: 0.9m in 0.4s -> ~2.25 m/s
+    elif t < 18.4:                                   
         f = (t - 18.0) / 0.4
         return (3.1, y, 1.0 - 0.9 * f), 1.0, 0.9 / 0.4, "falling"
-    else:                                             # motionless on the floor
+    else:                                             
         return (3.1, y, 0.1), 0.02, 0.0, "fallen"
 
 
@@ -276,7 +253,7 @@ async def stream_loop():
             "position": {"x": round(x, 2), "y": round(y, 2), "z": round(z, 2)},
             "motion": round(motion, 3),
             "impact": round(impact, 2),
-            "csi": synth_csi(motion, behind_wall, impact),
+            "csi": synth_csi(motion, behind_wall, impact, pos_x=x),
             "boards": BOARDS,
             "room": {"w": ROOM_W, "d": ROOM_D, "door": DOOR},
         })
