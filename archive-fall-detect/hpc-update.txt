@@ -1,0 +1,133 @@
+FALL DETECTION — HPC + SNOWFLAKE UPDATE
+========================================
+Date: 2026-05-31
+
+
+WHAT WAS DONE
+-------------
+
+1. PIVOTED ARCHITECTURE
+   Dropped the RuView encoder pipeline entirely. The new approach trains
+   directly on raw CSI amplitude (64 subcarriers per timestep) — simpler,
+   faster, and no dependency on RuView's broken tooling.
+
+2. LOCAL BASELINE TRAINED (models/fall_cnn.keras)
+   - Dataset: NTU-Fi HAR (1,200 sequences, 64 subcarriers, 2000 timesteps each)
+   - Preprocessing: sliding window T=100, stride=10 → 229,200 clips
+   - CNN: Conv1D(64) → BN → Conv1D(128) → BN → MaxPool → Conv1D(256)×2
+          → GlobalAvgPool → Dense(128) → Softmax
+   - Test results:
+       Recall:      1.000  PASS (target > 0.95)
+       Specificity: 0.892  (marginally below 0.90 target)
+       TP=5730  FN=0  FP=3097  TN=25553
+   - Threshold raised to 0.90 in infer.py to reduce false alarms
+
+3. SNOWFLAKE SCHEMA CREATED
+   Database: ghostnet / Schema: fall_detect
+   Tables:
+     recording_sessions  — one row per labelled recording session
+     csi_recordings      — one row per sequence, frames stored as VARIANT
+                           (JSON array [[f0..f63], ...], T x 64)
+   Views:
+     training_data       — clean interface for training script (adds label_int)
+     dataset_summary     — class balance at a glance
+
+4. NTU-Fi DATA UPLOADED TO SNOWFLAKE (populate_snowflake.py)
+   All 1,200 NTU-Fi sequences pushed to csi_recordings via gzipped
+   JSON Lines + Snowflake COPY INTO stage pipeline.
+   To verify after upload:
+     SELECT * FROM ghostnet.fall_detect.dataset_summary;
+
+5. HPC TRAINING SCRIPT (hpc_train.py)
+   Self-contained — no local files needed except itself.
+   - Pulls sequences from Snowflake training_data view
+   - Caches locally to snowflake_cache.npy (skip re-download on retry)
+   - Same preprocessing + CNN as local pipeline
+   - Saves models/fall_cnn.keras + models/scaler.npy
+   - Writes training_log.csv for monitoring
+
+6. SLURM JOB (job.slurm)
+   Requests: 1 GPU, 32 GB RAM, 3 hours, 4 CPUs
+   Installs pip deps, runs hpc_train.py with Snowflake credentials embedded.
+
+
+FILES CREATED / MODIFIED
+------------------------
+populate_snowflake.py   Upload NTU-Fi baseline data to Snowflake
+setup_snowflake.py      Create Snowflake DB/tables/views (already run)
+snowflake_config.py     Shared Snowflake connection helper
+hpc_train.py            Self-contained HPC training script
+job.slurm               SLURM submission script
+.env                    Snowflake credentials (gitignored)
+.env.example            Credential template (safe to commit)
+.gitignore              Excludes .env from git
+models/fall_cnn.keras   Local baseline model (Recall=1.0)
+models/scaler.npy       Per-subcarrier normalization params
+preprocess.py           Local preprocessing (NTU-Fi → windowed clips)
+model.py                CNN definition
+train.py                Local training script
+infer.py                Live inference (HTTP or UDP, threshold=0.90)
+
+
+WHAT TO DO NEXT
+---------------
+
+IMMEDIATE (before ESP32 sensors work):
+
+1. SUBMIT HPC JOB
+   Copy two files to HPC:
+     scp hpc_train.py job.slurm <hpcuser>@<hpc-address>:~/fall-detect/
+   SSH in and submit:
+     sbatch job.slurm
+   Monitor:
+     squeue -u <hpcuser>
+     tail -f fall_detect_<jobid>.log
+   When done, copy model back:
+     scp <hpcuser>@<hpc-address>:~/fall-detect/models/* ./models/
+
+2. VERIFY SNOWFLAKE DATA
+   In a Snowflake worksheet:
+     SELECT * FROM ghostnet.fall_detect.dataset_summary;
+   Expected: fall=200, no_fall=1000
+
+WHEN ESP32 SENSORS ARE WORKING:
+
+3. COLLECT REAL-ROOM DATA
+   The ESP32 should send 64-subcarrier amplitude packets via UDP (port 5005).
+   Run record.py to capture labelled sequences — aim for 20+ fall and
+   50+ no_fall recordings in your actual demo room.
+   record.py will INSERT rows directly into Snowflake.
+
+4. RETRAIN ON SNOWFLAKE
+   Once real data is in Snowflake (alongside NTU-Fi baseline), re-submit
+   the SLURM job. The model will train on the combined dataset.
+   NTU-Fi provides generalisation; real-room data provides environment fit.
+
+5. COPY MODEL BACK + TEST INFERENCE
+   scp <hpc>:~/fall-detect/models/* ./models/
+   python3 infer.py --source udp
+
+FOR THE DEMO:
+
+6. LIVE INFERENCE
+     python3 infer.py --source udp
+   The script maintains a 100-frame rolling window, scores every 10 frames,
+   and fires an alert after 3 consecutive fall detections (5s cooldown).
+
+7. OPTIONAL — BATCH SCORING IN SNOWFLAKE
+   Register the trained model in Snowflake ML Registry to show historical
+   fall detection on recorded data from SQL:
+     SELECT fall_cnn!PREDICT(frames) FROM csi_recordings;
+   See earlier chat for the full Registry registration snippet.
+
+
+KNOWN LIMITATIONS / THINGS TO WATCH
+-------------------------------------
+- NTU-Fi was recorded in a different room with different hardware than your
+  ESP32. Specificity may degrade in your demo room → retrain with real data.
+- The Keras Recall(class_id=...) metric is unreliable during training with
+  sparse integer labels (shows ~0.18 but actual recall is 1.0 on test set).
+  Ignore the training metric; trust the final test set report.
+- infer.py --source http uses the RuView server's 56-subcarrier output,
+  zero-padded to 64. This is a fallback only. The real source is --source udp
+  from the ESP32 directly.
