@@ -1,23 +1,28 @@
 import asyncio
 import json
+import math
 import os
+import socket
+import struct
+from collections import deque
 from datetime import datetime, timezone
 
+import numpy as np
 import snowflake.connector
 import uvicorn
-import websockets
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from scipy.signal import butter, filtfilt, welch
 
 load_dotenv()
 
-DOCKER_WS_URL = "ws://localhost:3001/ws/sensing"
-RECONNECT_DELAY = 3
-
+UDP_PORT = 5005
 HR_LOW_THRESHOLD = 50
 BR_LOW_THRESHOLD = 8
-FALL_BBOX_RATIO = 1.0  # width > height * ratio = fallen
+SAMPLE_RATE = 10       # ~10 Hz from ESP32
+WINDOW_SIZE = 300      # 30-second rolling window
+MIN_SAMPLES = 60       # need 6 seconds before computing vitals
 
 app = FastAPI()
 app.add_middleware(
@@ -29,8 +34,20 @@ app.add_middleware(
 
 CLIENTS: set[WebSocket] = set()
 EVENT_HISTORY: list[dict] = []
-
 ALERT_EVENTS = {"fall_detected", "low_heart_rate", "low_breathing_rate"}
+
+_amp_window: deque = deque(maxlen=WINDOW_SIZE)
+_tick = 0
+_last_occupied: bool | None = None
+_hr_was_low = False
+_br_was_low = False
+_fall_active = False
+_smooth_hr: float | None = None
+_smooth_br: float | None = None
+EMA_ALPHA = 0.2  # lower = smoother but slower to react
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
 
 def _sf_conn():
     return snowflake.connector.connect(
@@ -58,6 +75,16 @@ def _insert_event(event: dict):
     except Exception as e:
         print(f"Snowflake insert failed: {e}")
 
+def _insert_vitals_label(ts: str, hr: float, br: float):
+    try:
+        with _sf_conn() as conn:
+            conn.cursor().execute(
+                "INSERT INTO vitals_labels (timestamp, hr, br) VALUES (%s, %s, %s)",
+                (ts, hr, br)
+            )
+    except Exception as e:
+        print(f"Snowflake vitals label insert failed: {e}")
+
 def _fetch_events() -> list[dict]:
     try:
         with _sf_conn() as conn:
@@ -80,19 +107,6 @@ def _fetch_events() -> list[dict]:
         print(f"Snowflake query failed: {e}")
         return EVENT_HISTORY
 
-# Debounce state
-_last_occupied: bool | None = None
-_hr_was_low = False
-_br_was_low = False
-_fall_active = False
-_vital_tick = 0
-
-def now():
-    return datetime.now(timezone.utc).isoformat()
-
-def ts_from_unix(unix: float) -> str:
-    return datetime.fromtimestamp(unix, tz=timezone.utc).isoformat()
-
 async def broadcast(message: dict):
     EVENT_HISTORY.append(message)
     if message.get("event") in ALERT_EVENTS:
@@ -103,79 +117,142 @@ async def broadcast(message: dict):
         except Exception:
             CLIENTS.discard(client)
 
-def is_fallen(persons: list) -> tuple[bool, float]:
-    for p in persons:
-        bbox = p.get("bbox", {})
-        w = bbox.get("width", 0)
-        h = bbox.get("height", 1)
-        if h > 0 and w / h >= FALL_BBOX_RATIO:
-            return True, p.get("confidence", 0.9)
+def _bandpass(data, low, high, fs, order=4):
+    nyq = fs / 2
+    b, a = butter(order, [low / nyq, high / nyq], btype="band")
+    return filtfilt(b, a, data)
+
+def _dominant_freq(signal, fs):
+    nperseg = min(len(signal), 128)
+    freqs, psd = welch(signal, fs=fs, nperseg=nperseg)
+    return freqs[np.argmax(psd)]
+
+def _active_signal(window):
+    arr = np.array(window)
+    mask = np.mean(arr, axis=0) > 1.0  # drop null/DC subcarriers
+    active = arr[:, mask]
+    if active.shape[1] == 0:
+        return None
+    return np.mean(active, axis=1)
+
+def compute_vitals(window):
+    signal = _active_signal(window)
+    if signal is None:
+        return None, None
+    try:
+        br_signal = _bandpass(signal, 0.1, 0.5, SAMPLE_RATE)
+        br_bpm = _dominant_freq(br_signal, SAMPLE_RATE) * 60
+
+        hr_signal = _bandpass(signal, 0.8, 2.0, SAMPLE_RATE)
+        hr_bpm = _dominant_freq(hr_signal, SAMPLE_RATE) * 60
+    except Exception:
+        return None, None
+    return round(hr_bpm, 1), round(br_bpm, 1)
+
+def detect_presence(window):
+    signal = _active_signal(window)
+    if signal is None:
+        return False
+    return float(np.var(signal)) > 2.0
+
+def detect_fall(window):
+    signal = _active_signal(window)
+    if signal is None or len(signal) < 20:
+        return False, 0.0
+    # Short burst of high energy followed by stillness = fall
+    recent = signal[-10:]
+    prior = signal[-30:-10]
+    recent_var = float(np.var(recent))
+    prior_var = float(np.var(prior)) + 1e-6
+    ratio = recent_var / prior_var
+    if ratio > 8.0:
+        confidence = min(ratio / 20.0, 1.0)
+        return True, round(confidence, 2)
     return False, 0.0
 
-async def process_sensing(data: dict):
-    global _last_occupied, _hr_was_low, _br_was_low, _fall_active, _vital_tick
+async def process_csi(amplitudes: list, ts: str):
+    global _tick, _last_occupied, _hr_was_low, _br_was_low, _fall_active, _smooth_hr, _smooth_br
 
-    ts = ts_from_unix(data.get("timestamp", 0)) if data.get("timestamp") else now()
+    _amp_window.append(amplitudes)
+    _tick += 1
 
-    # Presence
-    classification = data.get("classification", {})
-    occupied = classification.get("presence", False)
-    if occupied != _last_occupied:
-        _last_occupied = occupied
-        await broadcast({"event": "presence_update", "occupied": occupied, "timestamp": ts})
+    window = list(_amp_window)
 
-    # Vitals — subsample to ~1 per second (Docker ticks at 10Hz)
-    _vital_tick += 1
-    vitals = data.get("vital_signs", {})
-    hr = vitals.get("heart_rate_bpm")
-    br = vitals.get("breathing_rate_bpm")
+    # Presence (every tick, needs 3 seconds)
+    if len(window) >= 30:
+        occupied = detect_presence(window[-30:])
+        if occupied != _last_occupied:
+            _last_occupied = occupied
+            await broadcast({"event": "presence_update", "occupied": occupied, "timestamp": ts})
 
-    if hr is not None and br is not None and _vital_tick % 10 == 0:
-        await broadcast({
-            "event": "vital_signs",
-            "heart_rate_bpm": round(hr, 1),
-            "breathing_rate_bpm": round(br, 1),
-            "timestamp": ts,
-        })
+    # Fall detection (every tick, needs 3 seconds)
+    if len(window) >= 30:
+        fallen, confidence = detect_fall(window)
+        if fallen and not _fall_active:
+            _fall_active = True
+            await broadcast({"event": "fall_detected", "confidence": confidence, "timestamp": ts})
+        elif not fallen:
+            _fall_active = False
 
-        # Low heart rate alert (only on transition into low state)
-        if hr < HR_LOW_THRESHOLD and not _hr_was_low:
-            _hr_was_low = True
-            await broadcast({"event": "low_heart_rate", "heart_rate_bpm": round(hr, 1), "timestamp": ts})
-        elif hr >= HR_LOW_THRESHOLD:
-            _hr_was_low = False
+    # Vitals (~1/sec, needs 6 seconds)
+    if _tick % 10 == 0 and len(window) >= MIN_SAMPLES:
+        hr, br = compute_vitals(window)
+        if hr is not None and br is not None:
+            # Clamp to physiological ranges
+            hr = max(40.0, min(180.0, hr))
+            br = max(4.0, min(40.0, br))
+            # Exponential moving average smoothing
+            _smooth_hr = hr if _smooth_hr is None else EMA_ALPHA * hr + (1 - EMA_ALPHA) * _smooth_hr
+            _smooth_br = br if _smooth_br is None else EMA_ALPHA * br + (1 - EMA_ALPHA) * _smooth_br
+            hr = round(_smooth_hr, 1)
+            br = round(_smooth_br, 1)
+            await asyncio.to_thread(_insert_vitals_label, ts, hr, br)
+            await broadcast({
+                "event": "vital_signs",
+                "heart_rate_bpm": hr,
+                "breathing_rate_bpm": br,
+                "timestamp": ts,
+            })
 
-        # Low breathing rate alert
-        if br < BR_LOW_THRESHOLD and not _br_was_low:
-            _br_was_low = True
-            await broadcast({"event": "low_breathing_rate", "breathing_rate_bpm": round(br, 1), "timestamp": ts})
-        elif br >= BR_LOW_THRESHOLD:
-            _br_was_low = False
+            if hr < HR_LOW_THRESHOLD and not _hr_was_low:
+                _hr_was_low = True
+                await broadcast({"event": "low_heart_rate", "heart_rate_bpm": hr, "timestamp": ts})
+            elif hr >= HR_LOW_THRESHOLD:
+                _hr_was_low = False
 
-    # Fall detection
-    persons = data.get("persons", [])
-    fallen, confidence = is_fallen(persons)
-    if fallen and not _fall_active:
-        _fall_active = True
-        await broadcast({"event": "fall_detected", "confidence": round(confidence, 2), "timestamp": ts})
-    elif not fallen:
-        _fall_active = False
+            if br < BR_LOW_THRESHOLD and not _br_was_low:
+                _br_was_low = True
+                await broadcast({"event": "low_breathing_rate", "breathing_rate_bpm": br, "timestamp": ts})
+            elif br >= BR_LOW_THRESHOLD:
+                _br_was_low = False
 
-async def docker_consumer():
+async def udp_consumer():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("", UDP_PORT))
+    print(f"Listening for ESP32 CSI on UDP port {UDP_PORT}...")
+    loop = asyncio.get_event_loop()
+    _last_packet_log = 0
+
     while True:
         try:
-            print(f"Connecting to Docker stream at {DOCKER_WS_URL}...")
-            async with websockets.connect(DOCKER_WS_URL) as ws:
-                print("Connected to Docker stream.")
-                async for raw in ws:
-                    try:
-                        data = json.loads(raw)
-                        await process_sensing(data)
-                    except Exception as e:
-                        print(f"Parse error: {e}")
+            data = await loop.run_in_executor(None, lambda: sock.recvfrom(4096)[0])
+            magic = struct.unpack_from("<I", data, 0)[0]
+            if magic != 0xC5110001:
+                continue
+            n_sub = struct.unpack_from("<H", data, 6)[0]
+            iq = data[20:]
+            amplitudes = []
+            for k in range(n_sub):
+                i = struct.unpack_from("b", iq, k * 2)[0]
+                q = struct.unpack_from("b", iq, k * 2 + 1)[0]
+                amplitudes.append(round(math.sqrt(i * i + q * q), 2))
+            _last_packet_log += 1
+            if _last_packet_log % 100 == 0:
+                print(f"ESP32 active — {_last_packet_log} packets received", flush=True)
+            await process_csi(amplitudes, now())
         except Exception as e:
-            print(f"Docker stream disconnected: {e}. Reconnecting in {RECONNECT_DELAY}s...")
-            await asyncio.sleep(RECONNECT_DELAY)
+            print(f"UDP error: {e}")
+            await asyncio.sleep(0.1)
 
 @app.get("/events")
 async def get_events():
@@ -206,7 +283,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(docker_consumer())
+    asyncio.create_task(udp_consumer())
 
 if __name__ == "__main__":
     uvicorn.run(app, host="localhost", port=8000)

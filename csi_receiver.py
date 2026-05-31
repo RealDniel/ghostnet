@@ -51,4 +51,3 @@ while True:
         amplitudes.append(round(math.sqrt(i*i + q*q), 2))
     ts = datetime.now(timezone.utc).isoformat()
     print(f"Board {node_id}  rssi={rssi}  subcarriers={n_sub}  amp[0..4]={[f'{a:.1f}' for a in amplitudes[:4]]}", flush=True)
-    insert_csi(ts, node_id, rssi, n_sub, amplitudes)
