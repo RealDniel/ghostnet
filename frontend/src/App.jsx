@@ -5,6 +5,8 @@ import StatusCard from './components/StatusCard'
 import EventLog from './components/EventLog'
 import ConnectionStatus from './components/ConnectionStatus'
 import VitalsGraph from './components/VitalsGraph'
+import Scene3D from './components/Scene3D'
+import CsiHeatmap from './components/CsiHeatmap'
 
 export const AppContext = createContext(null)
 
@@ -19,12 +21,34 @@ export default function App() {
   const { message, connected } = useWebSocket()
   const [fallDetected, setFallDetected] = useState(false)
   const [fallConfidence, setFallConfidence] = useState(null)
+  const [fallGrace, setFallGrace] = useState(null)
+  const [callPlaced, setCallPlaced] = useState(false)
   const [occupied, setOccupied] = useState(false)
   const [events, setEvents] = useState([])
   const [vitals, setVitals] = useState([])
+  const [frame, setFrame] = useState(null)
+
+  // Clear blob whenever the backend disconnects.
+  useEffect(() => {
+    if (!connected) {
+      setFrame(null)
+      setOccupied(false)
+    }
+  }, [connected])
 
   useEffect(() => {
     if (!message) return
+
+    if (message.event === 'frame') {
+      setFrame(message)
+      if (message.occupied !== undefined) setOccupied(message.occupied)
+      return
+    }
+
+    if (message.event === 'session_end') {
+      // Blob freezes at last position; next script teleports it to the new start.
+      return
+    }
 
     if (message.event === 'vital_signs') {
       setVitals((prev) => {
@@ -44,6 +68,20 @@ export default function App() {
       return
     }
 
+    if (message.event === 'fall_cancelled') {
+      setFallDetected(false)
+      setFallConfidence(null)
+      setFallGrace(null)
+      setCallPlaced(false)
+      return
+    }
+
+    if (message.event === 'call_placed') {
+      setCallPlaced(true)
+      setEvents((prev) => [message, ...prev])
+      return
+    }
+
     if (ALERT_EVENTS.has(message.event)) {
       setEvents((prev) => {
         if (prev.some((e) => e.timestamp === message.timestamp)) return prev
@@ -53,6 +91,8 @@ export default function App() {
       if (message.event === 'fall_detected') {
         setFallDetected(true)
         setFallConfidence(message.confidence ?? null)
+        setFallGrace(message.grace_seconds ?? null)
+        setCallPlaced(false)
       }
     }
   }, [message])
@@ -60,10 +100,12 @@ export default function App() {
   function dismissFall() {
     setFallDetected(false)
     setFallConfidence(null)
+    setFallGrace(null)
+    setCallPlaced(false)
   }
 
   return (
-    <AppContext.Provider value={{ fallDetected, fallConfidence, occupied, events, vitals, connected, dismissFall }}>
+    <AppContext.Provider value={{ fallDetected, fallConfidence, fallGrace, callPlaced, occupied, events, vitals, connected, dismissFall, frame }}>
       <div className="min-h-screen bg-stone-100">
         <header className="bg-stone-50 border-b border-stone-200 px-4 py-3 flex items-center justify-between">
           <h1 className="text-lg font-bold text-gray-900">GhostNet</h1>
@@ -72,7 +114,9 @@ export default function App() {
 
         <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
           <FallAlert />
+          <Scene3D />
           <StatusCard />
+          <CsiHeatmap />
           <VitalsGraph />
           <EventLog />
         </main>
