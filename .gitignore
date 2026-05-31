@@ -5,18 +5,37 @@ node_modules/
 dist/
 build/
 
-# Local env files
+# Local env files — never commit secrets
 .env
 .env.local
 .env.*.local
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Large data / recordings (commit the baked demo files in data/ but not raw captures)
+data/recordings/
+*.csi.jsonl.raw
+*.pcap
+
 # Logs
 *.log
 npm-debug.log*
+/tmp/
 
 # Editor
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
